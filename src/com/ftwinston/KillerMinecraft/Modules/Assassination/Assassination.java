@@ -1,6 +1,5 @@
 package com.ftwinston.KillerMinecraft.Modules.Assassination;
 
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
@@ -33,7 +32,7 @@ public class Assassination extends GameMode
 {
 	static final long ticksPerMinute = 1200L;
 	static final double hunterAdjacentKillDistanceSq = 144;
-	static final int kickableScoreThreshold = -5;
+	static final int kickableScoreThreshold = -10;
 	
 	NumericOption setupPeriod, winningScore;
 	
@@ -53,29 +52,27 @@ public class Assassination extends GameMode
 	public List<String> getHelpMessages(TeamInfo team)
 	{
 		LinkedList<String> messages = new LinkedList<String>();
-
-		if ( inWarmup )
-			messages.add("Every player will soon be assigned a target to kill, which they must do without being seen by anyone else.");
-		else
-			messages.add("Every player has been assigned a target to kill, which they must do without being seen by anyone else.");
-
-		messages.add("Your compass points towards your victim, and if anyone sees you kill them, you will die instead of them.");
-		messages.add("Remember that someone else is hunting you! If you kill anyone other than your target or your hunter, you will die instead of them.");
-		messages.add("When you kill your target, you are assigned their target, and the game continues until only one player remains alive.");
+		messages.add("Every player will be assigned a target to kill. You may only your target, or the player hunting you.");
+		messages.add("Remember that someone else is hunting you! If you kill anyone other than your target or your hunter, you will die.");
+		messages.add("When you kill your target, you are assigned their target, and the hunt continues.");
 		
 		return messages;
 	}
 	
-	Objective playerLives;
+	Objective scores, pointsPerKill;
 	
 	@Override
 	public Scoreboard createScoreboard()
 	{
 		Scoreboard scoreboard = Bukkit.getScoreboardManager().getNewScoreboard();
 		
-		playerLives = scoreboard.registerNewObjective("lives", "dummy");
-		playerLives.setDisplaySlot(DisplaySlot.SIDEBAR);
-		playerLives.setDisplayName("Lives remaining");
+		scores = scoreboard.registerNewObjective("points", "dummy");
+		scores.setDisplaySlot(DisplaySlot.PLAYER_LIST);
+		scores.setDisplayName("Player scores");
+		
+		pointsPerKill = scoreboard.registerNewObjective("perKill", "dummy");
+		pointsPerKill.setDisplaySlot(DisplaySlot.SIDEBAR);
+		pointsPerKill.setDisplayName("Points per Kill");
 		
 		return scoreboard;
 	}
@@ -89,7 +86,7 @@ public class Assassination extends GameMode
 		return false;
 	}
 	
-	ArrayList<String> queuedPlayers = new ArrayList<>();
+	LinkedList<String> queuedPlayers = new LinkedList<>();
 	HashMap<String, String> playerTargets = new HashMap<>();
 	HashMap<String, String> playerHunters = new HashMap<>();
 	
@@ -148,7 +145,20 @@ public class Assassination extends GameMode
 		
 		// whoever hunted this player must now hunt their target
 		Player hunter = Helper.getPlayer(hunterName);
-		Player target = Helper.getPlayer(targetName);		
+		Player target = Helper.getPlayer(targetName);
+		
+		// additionally, all queued players should also be added in
+		while (!queuedPlayers.isEmpty())
+		{
+			String queuedName = queuedPlayers.pop();
+			Player queued = Helper.getPlayer(queuedName);
+			if (queued == null)
+				continue;
+			
+			setTargetOf(hunter, queued);
+			hunter = queued;
+		}
+		
 		setTargetOf(hunter, target);
 	}
 	
@@ -168,12 +178,14 @@ public class Assassination extends GameMode
 		queuedPlayers.clear();
 		playerTargets.clear();
 		playerHunters.clear();
+		recentKills.clear();
+		initializeKillTypes();		
 		
 		List<Player> players = getOnlinePlayers();
 	
 		for ( Player player : players )
 		{
-			Score score = playerLives.getScore(player.getName());
+			Score score = scores.getScore(player.getName());
 			score.setScore(0);
 		}
 		
@@ -232,7 +244,7 @@ public class Assassination extends GameMode
 		else
 		{
 			player.sendMessage("Nobody is currently hunting you. You will get a target as soon as someone else dies.");
-			queuedPlayers.add(player.getName());
+			queuedPlayers.push(player.getName());
 		}
 		return;
 	}
@@ -240,11 +252,11 @@ public class Assassination extends GameMode
 	@Override
 	public void playerJoinedLate(Player player)
 	{
-		Score score = playerLives.getScore(player.getName());
+		Score score = scores.getScore(player.getName());
 		score.setScore(0);
 
 		player.sendMessage("Nobody is currently hunting you. You will get a target as soon as someone else dies.");
-		queuedPlayers.add(player.getName());
+		queuedPlayers.push(player.getName());
 	}
 	
 	@Override
@@ -297,7 +309,7 @@ public class Assassination extends GameMode
 		Player victimTarget = getTargetOf(victim);
 
 		removePlayerFromHunt(victim);
-		queuedPlayers.add(victim.getName());
+		queuedPlayers.push(victim.getName());
 		
 		if (attacker == null)
 		{
@@ -320,7 +332,7 @@ public class Assassination extends GameMode
 		{
 			// target kill, award points to hunter
 			int points = getPointsForKill(event.getCause());
-			Score score = playerLives.getScore(attacker.getName());
+			Score score = scores.getScore(attacker.getName());
 			score.setScore(score.getScore() + points);
 			
 			victimTarget.sendMessage("You killed " + ChatColor.YELLOW + victim.getName() + ChatColor.RESET + ", who was your target, and were awarded " + points + " points.");
@@ -342,7 +354,7 @@ public class Assassination extends GameMode
 			// wasn't a target kill or legit self defense
 			// remove points from attacker, and also kill them
 			int points = getPointsForWrongKill(attacker);
-			Score score = playerLives.getScore(attacker.getName());
+			Score score = scores.getScore(attacker.getName());
 			score.setScore(score.getScore() - points);
 			
 			attacker.damage(100);
@@ -350,20 +362,181 @@ public class Assassination extends GameMode
 			victimTarget.sendMessage("You killed " + ChatColor.YELLOW + victim.getName() + ChatColor.RESET + ", who was not your target or your hunter. You have been punished.");
 
 			// if a player kills too many "randoms", they are out of the game
-			if (score.getScore() < kickableScoreThreshold)
+			if (score.getScore() <= kickableScoreThreshold)
+			{
+				broadcastMessage(ChatColor.YELLOW + attacker.getName() + ChatColor.RESET + " made too many unauthorized kills, and has been eliminated.");
 				Helper.makeSpectator(getGame(), attacker);
+			}
 		}
+	}
+	
+	class KillType
+	{
+		String name;
+		int baseValue, currentValue;
+		float valueScale;
+		boolean visible;
+		
+		public KillType(String name, int value, boolean visibleByDefault)
+		{
+			this.name = name;
+			this.baseValue = value;
+			this.currentValue = baseValue;
+			this.valueScale = 1f;
+			this.visible = visibleByDefault;
+			
+			killTypes.put(name, this);
+		}
+		
+		static final String Explosion = "Explosion", Crushing = "Crushing", Drowning = "Drowning", Impaling = "Impaling", Hitting = "Hitting", Falling = "Falling", Shooting = "Shooting", Burning = "Burning", Lava = "Lava", Starving = "Starving", Suffocating = "Suffocating";
+		static final String Lightning = "Lightning", Magic = "Magic", Custom = "Custom", Melting = "Melting", Poisoning = "Poisoning", Void = "Void", Wither = "Withering";
+	}
+	
+	HashMap<String, KillType> killTypes;
+	
+	private void initializeKillTypes()
+	{
+		killTypes = new HashMap<>();
+		
+		new KillType("Explosion", 25, true);
+		new KillType("Crushing", 50, true);
+		new KillType("Drowning", 30, true);
+		new KillType("Hitting", 10, true);
+		new KillType("Shooting", 18, true);
+		new KillType("Burning", 15, true);
+		new KillType("Lava", 20, true);
+		new KillType("Starving", 25, true);
+		new KillType("Falling", 18, true);
+		new KillType("Suffocating", 35, true);
+
+		new KillType("Impaling", 30, false);
+		new KillType("Poisoning", 25, false);
+		new KillType("Lightning", 45, false);
+		new KillType("Magic", 25, false);
+		new KillType("Custom", 30, false);
+		new KillType("Melting", 50, false);
+		new KillType("Void", 25, false);
+		new KillType("Withering", 35, false);
+		
+		updateKillValues(null);
+	}
+	
+	private KillType getKillType(DamageCause cause)
+	{
+		switch (cause)
+		{
+		case BLOCK_EXPLOSION:
+		case ENTITY_EXPLOSION:
+			return killTypes.get(KillType.Explosion);
+		case CONTACT:
+		case THORNS:
+			return killTypes.get(KillType.Impaling);
+		case CUSTOM:
+			return killTypes.get(KillType.Custom);
+		case DROWNING:
+			return killTypes.get(KillType.Drowning);
+		case ENTITY_ATTACK:
+			return killTypes.get(KillType.Hitting);
+		case FALL:
+			return killTypes.get(KillType.Falling);
+		case FALLING_BLOCK:
+			return killTypes.get(KillType.Crushing);
+		case FIRE:
+		case FIRE_TICK:
+			return killTypes.get(KillType.Burning);
+		case LAVA:
+			return killTypes.get(KillType.Lava);
+		case LIGHTNING:
+			return killTypes.get(KillType.Lightning);
+		case MAGIC:
+			return killTypes.get(KillType.Magic);
+		case MELTING:
+			return killTypes.get(KillType.Melting);
+		case POISON:
+			return killTypes.get(KillType.Poisoning);
+		case PROJECTILE:
+			return killTypes.get(KillType.Shooting);
+		case STARVATION:
+			return killTypes.get(KillType.Starving);
+		case SUFFOCATION:
+			return killTypes.get(KillType.Suffocating);
+		case VOID:
+			return killTypes.get(KillType.Void);
+		case WITHER:
+			return killTypes.get(KillType.Wither);
+		case SUICIDE:
+			break;
+		}
+		return null;
 	}
 
 	private int getPointsForKill(DamageCause cause)
 	{
-		// TODO: for each cause, track the base "difficulty" and adjust based on how "popular" it has been
-		return 1;
+		KillType killType = getKillType(cause);
+		if (killType == null)
+			return 0;
+		
+		int pointsForKill = killType.currentValue;
+		
+		updateKillValues(killType);
+		
+		return pointsForKill;
 	}
+
+	static final int recentKillStoreCount = 10;
+	LinkedList<KillType> recentKills = new LinkedList<>();
+	
+	private void updateKillValues(KillType killTypeUsed)
+	{
+		if (killTypeUsed != null)
+		{
+			recentKills.addFirst(killTypeUsed);
+			if (recentKills.size() > recentKillStoreCount)
+				recentKills.removeLast();
+		}
+		
+		for (KillType type : killTypes.values())
+			type.valueScale = 1f;
+		
+		// reduce the value of the most recent kill type by 1/3, the second most recent by 1/4, etc. Cumulatively. 
+		int reductionScale = 3;
+		for (KillType type : recentKills)
+		{
+			type.valueScale -= 1f / reductionScale;
+			reductionScale ++;
+		}
+
+		for (KillType type : killTypes.values())	
+		{
+			// calculate value to award
+			type.currentValue = Math.max(1, (int)(type.baseValue * type.valueScale));
+			
+			if (!type.visible)
+				continue;
+			
+			// update display indicator for players
+			Score score = pointsPerKill.getScore(type.name);
+			score.setScore(type.currentValue);	
+		}
+	}
+	
+	HashMap<String, Integer> wrongKills = new HashMap<String, Integer>();
 
 	private int getPointsForWrongKill(Player attacker)
 	{
-		// TODO: track how many "wrong" kills a player has committed, and increment by one each time
-		return 1;
+		int numWrong; 
+		if (wrongKills.containsKey(attacker))
+			numWrong = wrongKills.get(attacker).intValue() + 1;
+		else
+			numWrong = 1;
+		
+		wrongKills.put(attacker.getName(), Integer.valueOf(numWrong));
+		
+		return numWrong * numWrong;
 	}
+	
+	// TODO: Add "target" item, showing name & head
+	// TODO: Using this item should launch ender eye towards target
+	// TODO: [Option] Randomized names & skins, via this: https://bitbucket.org/inventivetalent/nicknamer/src/9c33d4419616ed8a71d9a4ee0dd88916229444a4/NickNamer/Bukkit/src/de/inventivegames/nickname/?at=master
+	// TODO: [Option] expend coal/charcoal to use target item
 }
