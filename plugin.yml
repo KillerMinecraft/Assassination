@@ -1,0 +1,7 @@
+name: Assassination
+main: com.ftwinston.KillerMinecraft.Modules.Assassination.Plugin
+depend: [Killer_Minecraft]
+version: 1
+load: STARTUP
+description: A game mode for Killer Minecraft
+author: FTWinston
