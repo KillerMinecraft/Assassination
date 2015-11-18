@@ -1,5 +1,6 @@
 package com.ftwinston.KillerMinecraft.Modules.Assassination;
 
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
@@ -15,13 +16,20 @@ import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Location;
 import org.bukkit.OfflinePlayer;
+import org.bukkit.SkullType;
 import org.bukkit.World.Environment;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
+import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntityDamageEvent.DamageCause;
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryType;
+import org.bukkit.event.player.PlayerDropItemEvent;
+import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.SkullMeta;
 import org.bukkit.scoreboard.DisplaySlot;
 import org.bukkit.scoreboard.Objective;
 import org.bukkit.scoreboard.Score;
@@ -43,7 +51,7 @@ public class Assassination extends GameMode
 	public Option[] setupOptions()
 	{
 		setupPeriod = new NumericOption("Setup time (minutes)", 0, 5, Material.WATCH, 2);
-		winningScore = new NumericOption(); // argh, the values aren't contiguous. Need to make this a choice instead. 
+		winningScore = new NumericOption("Score limit", 0, 350, Material.IRON_SWORD, 100) { Interval = 50; }; 
 		
 		return new Option[] { setupPeriod };
 	}
@@ -112,7 +120,11 @@ public class Assassination extends GameMode
 			playerTargets.remove(hunter.getName());
 			
 			if (hunter.isOnline())
-				((Player)hunter).sendMessage("You do not currently have a target.");
+			{
+				Player online = (Player)hunter;
+				removeTargetItem(online);
+				online.sendMessage("You do not currently have a target.");
+			}
 		}
 		else if (hunter == null)
 		{
@@ -130,10 +142,15 @@ public class Assassination extends GameMode
 			playerTargets.remove(prev);
 			
 			if (hunter.isOnline())
-				((Player)hunter).sendMessage((prev == null ? "Your target is: " : "Your new target is: ") +  ChatColor.YELLOW + target.getName() + ChatColor.RESET + "!");
+			{
+				Player online = (Player)hunter;
+				removeTargetItem(online);
+				giveTargetItem(online, target);
+				online.sendMessage((prev == null ? "You have a target." : "You have a new target.") + "Their head is in your inventory. Also, you are being hunted!");
+			}
 		}
 	}
-	
+
 	private void removePlayerFromHunt(OfflinePlayer removing)
 	{
 		// this player must no longer feature in the hunt lists
@@ -179,6 +196,7 @@ public class Assassination extends GameMode
 		playerTargets.clear();
 		playerHunters.clear();
 		recentKills.clear();
+		nextEnderEyeTimes.clear();
 		initializeKillTypes();		
 		
 		List<Player> players = getOnlinePlayers();
@@ -240,7 +258,7 @@ public class Assassination extends GameMode
 	{
 		Player target = getTargetOf(player);
 		if (target != null)
-			player.sendMessage("Your target is: " +  ChatColor.YELLOW + target + ChatColor.RESET + "!");
+			player.sendMessage("You have a target: their head is in your inventory. Also, you are being hunted!");
 		else
 		{
 			player.sendMessage("Nobody is currently hunting you. You will get a target as soon as someone else dies.");
@@ -535,8 +553,102 @@ public class Assassination extends GameMode
 		return numWrong * numWrong;
 	}
 	
-	// TODO: Add "target" item, showing name & head
-	// TODO: Using this item should launch ender eye towards target
+	static final String skullNamePrefix = "Target: ";
+	private boolean isTargetSkull(ItemStack stack)
+	{	
+		if (!stack.hasItemMeta())
+			return false;
+		
+		SkullMeta meta = (SkullMeta)stack.getItemMeta();
+		return meta.getDisplayName().startsWith(skullNamePrefix);
+	}
+	
+	private void removeTargetItem(Player player)
+	{
+		// remove all skull items that are named with the given prefix, to be sure they're from this game mode.  
+		HashMap<Integer, ? extends ItemStack> matches = player.getInventory().all(Material.SKULL_ITEM);
+		
+		for (Integer key : matches.keySet())
+		{
+			ItemStack stack = matches.get(key);
+			if (isTargetSkull(stack))
+				player.getInventory().clear(key.intValue());
+		}
+	}
+
+	private void giveTargetItem(Player hunter, OfflinePlayer target)
+	{
+		ItemStack skull = new ItemStack(Material.SKULL_ITEM, 1, (byte)SkullType.PLAYER.ordinal());
+        SkullMeta skullMeta = (SkullMeta)Bukkit.getItemFactory().getItemMeta(Material.SKULL_ITEM);
+        skullMeta.setOwner(target.getName());
+        
+        skullMeta.setDisplayName(skullNamePrefix + ChatColor.YELLOW + target.getName());
+        skullMeta.setLore(Arrays.asList("Score points for killing this player.", "To find them, place this item", "and follow the eye of ender."));
+        
+        skull.setItemMeta(skullMeta);
+        
+        hunter.getInventory().addItem(skull);
+	}
+	
+	HashMap<String, Long> nextEnderEyeTimes = new HashMap<>();
+	static final long enderEyeRepeatInterval = 100;
+	
+	@EventHandler(priority = EventPriority.HIGHEST)
+	public void onEvent(BlockPlaceEvent event)
+	{
+		ItemStack stack = event.getItemInHand();
+		if (stack.getType() != Material.SKULL_ITEM || !isTargetSkull(stack) || event.getPlayer() == null)
+			return;
+		
+		event.setCancelled(true);
+		
+		Player target = getTargetOf(event.getPlayer());
+		if (target == null)
+			return;
+		
+		// if this has been done too recently, cancel
+		Long nextTime = nextEnderEyeTimes.get(event.getPlayer().getName());
+		long time = getWorld(0).getFullTime(); 
+		
+		if (nextTime != null && nextTime.longValue() > time)
+		{
+			event.getPlayer().sendMessage("You can't do that again so quickly");
+			return;
+		}
+		
+		nextEnderEyeTimes.put(event.getPlayer().getName(), time + enderEyeRepeatInterval);
+				
+		// create eye of ender, leading to this player's target
+		Helper.createFlyingEnderEye(event.getPlayer(), target.getLocation());
+	}
+	
+	@EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+	public void onDrop(PlayerDropItemEvent event)
+	{
+		// don't let players drop their target indicator
+		ItemStack stack = event.getItemDrop().getItemStack();
+		if (stack.getType() != Material.SKULL_ITEM)
+			return;
+		
+		if (isTargetSkull(stack))
+			event.setCancelled(true);
+	}
+	
+	@EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+	public void onEvent(InventoryClickEvent event) {
+		ItemStack stack = event.getCurrentItem();
+		if (stack.getType() != Material.SKULL_ITEM || !isTargetSkull(stack))
+			return;
+		
+		Inventory top = event.getView().getTopInventory();
+        Inventory bottom = event.getView().getBottomInventory();
+
+        // don't let players place the target indicator into any other inventory
+        if (top != null && bottom != null && top.getType() != InventoryType.PLAYER)
+        	if (event.getRawSlot() > top.getSize())
+                event.setCancelled(true);
+	}
+	
 	// TODO: [Option] Randomized names & skins, via this: https://bitbucket.org/inventivetalent/nicknamer/src/9c33d4419616ed8a71d9a4ee0dd88916229444a4/NickNamer/Bukkit/src/de/inventivegames/nickname/?at=master
 	// TODO: [Option] expend coal/charcoal to use target item
 }
