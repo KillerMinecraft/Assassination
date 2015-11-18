@@ -94,30 +94,42 @@ public class Assassination extends GameMode
 		return false;
 	}
 	
-	LinkedList<String> queuedPlayers = new LinkedList<>();
-	HashMap<String, String> playerTargets = new HashMap<>();
-	HashMap<String, String> playerHunters = new HashMap<>();
+	class PlayerInfo
+	{
+		public PlayerInfo(String name) { this.name = name; }
+		
+		String name;
+		PlayerInfo hunter, target;
+		int currentWrongKillScore = 1, lastWrongKillScore = 0;
+		long nextEnderEyeTime = 0;
+	}
+	
+	HashMap<String, PlayerInfo> playerInfo = new HashMap<>();
+	LinkedList<PlayerInfo> queuedPlayers = new LinkedList<>();
 	
 	private Player getTargetOf(OfflinePlayer player)
 	{
-		String name = playerTargets.get(player.getName());
-		return Helper.getPlayer(name);
+		PlayerInfo info = playerInfo.get(player.getName());
+		return info.target == null ? null : Helper.getPlayer(info.target.name);
 	}
 	
 	private Player getHunterOf(OfflinePlayer player)
 	{
-		String name = playerHunters.get(player.getName());
-		return Helper.getPlayer(name);
+		PlayerInfo info = playerInfo.get(player.getName());
+		return info.hunter == null ? null : Helper.getPlayer(info.hunter.name);
 	}
 
 	private void setTargetOf(OfflinePlayer hunter, OfflinePlayer target)
 	{
+		PlayerInfo hunterInfo = hunter == null ? null : playerInfo.get(hunter.getName());
+		PlayerInfo targetInfo = target == null ? null : playerInfo.get(target.getName());
+		
 		if (target == null)
 		{
 			if (hunter == null)
 				return;
-			
-			playerTargets.remove(hunter.getName());
+		
+			hunterInfo.target = null;
 			
 			if (hunter.isOnline())
 			{
@@ -128,37 +140,52 @@ public class Assassination extends GameMode
 		}
 		else if (hunter == null)
 		{
-			playerHunters.remove(target.getName());
+			targetInfo.hunter = null;
 			
 			if (target.isOnline())
 				((Player)target).sendMessage("You are not currently being hunted by anyone.");
 		}
 		else
-		{
-			String prev = playerTargets.put(hunter.getName(), target.getName());
-			playerHunters.remove(prev);
+		{	
+			boolean hadTarget = hunterInfo.target != null;
 			
-			prev = playerHunters.put(target.getName(), hunter.getName());
-			playerTargets.remove(prev);
+			if (hunterInfo.target != null)
+				hunterInfo.target.hunter = null;
+			hunterInfo.target = targetInfo;
+			
+			if (targetInfo.hunter != null)
+				targetInfo.hunter.target = null;
+			targetInfo.hunter = hunterInfo;
 			
 			if (hunter.isOnline())
 			{
 				Player online = (Player)hunter;
 				removeTargetItem(online);
 				giveTargetItem(online, target);
-				online.sendMessage((prev == null ? "You have a target." : "You have a new target.") + "Their head is in your inventory. Also, you are being hunted!");
+				online.sendMessage((hadTarget ? "You have a new target." : "You have a target.") + " Their head is in your inventory. Also, you are being hunted!");
 			}
 		}
 	}
 
-	private void removePlayerFromHunt(OfflinePlayer removing)
+	private PlayerInfo removePlayerFromHunt(OfflinePlayer removing)
 	{
 		// this player must no longer feature in the hunt lists
-		String hunterName = playerHunters.remove(removing.getName());
-		String targetName = playerTargets.get(removing.getName());
+		PlayerInfo info = playerInfo.get(removing.getName());
+		
+		String hunterName = info.hunter.name;
+		String targetName = info.target.name;
+		
+		if (info.hunter != null)
+			info.hunter.target = null;
+		info.hunter = null;
+		
+		if (info.target != null)
+			info.target.hunter = null;
+		info.target = null;
+		
 
 		if (hunterName.equals(targetName))
-			return;
+			return info;
 		
 		// whoever hunted this player must now hunt their target
 		Player hunter = Helper.getPlayer(hunterName);
@@ -167,8 +194,8 @@ public class Assassination extends GameMode
 		// additionally, all queued players should also be added in
 		while (!queuedPlayers.isEmpty())
 		{
-			String queuedName = queuedPlayers.pop();
-			Player queued = Helper.getPlayer(queuedName);
+			PlayerInfo queuedInfo = queuedPlayers.pop();
+			Player queued = Helper.getPlayer(queuedInfo.name);
 			if (queued == null)
 				continue;
 			
@@ -177,6 +204,7 @@ public class Assassination extends GameMode
 		}
 		
 		setTargetOf(hunter, target);
+		return info;
 	}
 	
 	@Override
@@ -192,11 +220,8 @@ public class Assassination extends GameMode
 	@Override
 	public void gameStarted()
 	{
-		queuedPlayers.clear();
-		playerTargets.clear();
-		playerHunters.clear();
+		playerInfo.clear();
 		recentKills.clear();
-		nextEnderEyeTimes.clear();
 		initializeKillTypes();		
 		
 		List<Player> players = getOnlinePlayers();
@@ -205,6 +230,8 @@ public class Assassination extends GameMode
 		{
 			Score score = scores.getScore(player.getName());
 			score.setScore(0);
+			
+			playerInfo.put(player.getName(), new PlayerInfo(player.getName()));
 		}
 		
 		long setupDelay = setupPeriod.getValue() == 0 ? 200 : ticksPerMinute * setupPeriod.getValue();
@@ -262,7 +289,10 @@ public class Assassination extends GameMode
 		else
 		{
 			player.sendMessage("Nobody is currently hunting you. You will get a target as soon as someone else dies.");
-			queuedPlayers.push(player.getName());
+			
+			PlayerInfo info = playerInfo.get(player.getName());
+			
+			queuedPlayers.push(info);
 		}
 		return;
 	}
@@ -274,7 +304,7 @@ public class Assassination extends GameMode
 		score.setScore(0);
 
 		player.sendMessage("Nobody is currently hunting you. You will get a target as soon as someone else dies.");
-		queuedPlayers.push(player.getName());
+		playerInfo.put(player.getName(), new PlayerInfo(player.getName()));
 	}
 	
 	@Override
@@ -326,8 +356,8 @@ public class Assassination extends GameMode
 		Player victimHunter = getHunterOf(victim);
 		Player victimTarget = getTargetOf(victim);
 
-		removePlayerFromHunt(victim);
-		queuedPlayers.push(victim.getName());
+		PlayerInfo victimInfo = removePlayerFromHunt(victim);
+		queuedPlayers.push(victimInfo);
 		
 		if (attacker == null)
 		{
@@ -537,20 +567,17 @@ public class Assassination extends GameMode
 			score.setScore(type.currentValue);	
 		}
 	}
-	
-	HashMap<String, Integer> wrongKills = new HashMap<String, Integer>();
 
 	private int getPointsForWrongKill(Player attacker)
 	{
-		int numWrong; 
-		if (wrongKills.containsKey(attacker))
-			numWrong = wrongKills.get(attacker).intValue() + 1;
-		else
-			numWrong = 1;
+		PlayerInfo info = playerInfo.get(attacker.getName());
 		
-		wrongKills.put(attacker.getName(), Integer.valueOf(numWrong));
+		// calculate points to award based on Fibonacci sequence
+		int value = info.lastWrongKillScore + info.currentWrongKillScore;
+		info.lastWrongKillScore = info.currentWrongKillScore;
+		info.currentWrongKillScore = value;
 		
-		return numWrong * numWrong;
+		return value;
 	}
 	
 	static final String skullNamePrefix = "Target: ";
@@ -590,7 +617,6 @@ public class Assassination extends GameMode
         hunter.getInventory().addItem(skull);
 	}
 	
-	HashMap<String, Long> nextEnderEyeTimes = new HashMap<>();
 	static final long enderEyeRepeatInterval = 100;
 	
 	@EventHandler(priority = EventPriority.HIGHEST)
@@ -607,16 +633,16 @@ public class Assassination extends GameMode
 			return;
 		
 		// if this has been done too recently, cancel
-		Long nextTime = nextEnderEyeTimes.get(event.getPlayer().getName());
+		PlayerInfo info = playerInfo.get(event.getPlayer().getName());
 		long time = getWorld(0).getFullTime(); 
 		
-		if (nextTime != null && nextTime.longValue() > time)
+		if (info.nextEnderEyeTime > time)
 		{
 			event.getPlayer().sendMessage("You can't do that again so quickly");
 			return;
 		}
 		
-		nextEnderEyeTimes.put(event.getPlayer().getName(), time + enderEyeRepeatInterval);
+		info.nextEnderEyeTime = time + enderEyeRepeatInterval;
 				
 		// create eye of ender, leading to this player's target
 		Helper.createFlyingEnderEye(event.getPlayer(), target.getLocation());
