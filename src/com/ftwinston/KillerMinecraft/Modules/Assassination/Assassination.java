@@ -9,6 +9,7 @@ import com.ftwinston.KillerMinecraft.GameMode;
 import com.ftwinston.KillerMinecraft.Helper;
 import com.ftwinston.KillerMinecraft.Option;
 import com.ftwinston.KillerMinecraft.PlayerFilter;
+import com.ftwinston.KillerMinecraft.Configuration.ChoiceOption;
 import com.ftwinston.KillerMinecraft.Configuration.NumericOption;
 import com.ftwinston.KillerMinecraft.Configuration.TeamInfo;
 
@@ -42,18 +43,45 @@ public class Assassination extends GameMode
 	static final double hunterAdjacentKillDistanceSq = 144;
 	static final int kickableScoreThreshold = -10;
 	
-	NumericOption setupPeriod, winningScore;
+	NumericOption setupPeriod, timeLimit;
+	ChoiceOption<ScoreLimit> winningScore;
 	
 	@Override
 	public int getMinPlayers() { return 4; }
 	
+	enum ScoreLimit
+	{
+		None(0),
+		Fifty(50),
+		OneHundred(100),
+		OneHundredFifty(150),
+		TwoHundred(200),
+		TwoHundredFifty(250),
+		ThreeHundred(300),
+		ThreeHundredFifty(350);
+		
+		private ScoreLimit(int val) { this.val = val; }
+		int val;
+	}
+	
 	@Override
 	public Option[] setupOptions()
 	{
-		setupPeriod = new NumericOption("Setup time (minutes)", 0, 5, Material.WATCH, 2);
-		winningScore = new NumericOption("Score limit", 0, 350, Material.IRON_SWORD, 100) { Interval = 50; }; 
+		setupPeriod = new NumericOption("Setup time (minutes)", 0, 5, Material.WORKBENCH, 2);
 		
-		return new Option[] { setupPeriod };
+		winningScore = new ChoiceOption<ScoreLimit>("Score limit", ScoreLimit.TwoHundred);
+		winningScore.addChoice("No limit", ScoreLimit.None, Material.BARRIER);
+		winningScore.addChoice("50 points", ScoreLimit.Fifty, Material.STONE_SWORD);
+		winningScore.addChoice("100 points", ScoreLimit.OneHundred, Material.STONE_SWORD);
+		winningScore.addChoice("150 points", ScoreLimit.OneHundredFifty, Material.STONE_SWORD);
+		winningScore.addChoice("200 points", ScoreLimit.TwoHundred, Material.STONE_SWORD);
+		winningScore.addChoice("250 points", ScoreLimit.TwoHundredFifty, Material.STONE_SWORD);
+		winningScore.addChoice("300 points", ScoreLimit.ThreeHundred, Material.STONE_SWORD);
+		winningScore.addChoice("350 points", ScoreLimit.ThreeHundredFifty, Material.STONE_SWORD);
+		
+		timeLimit = new NumericOption("TimeLimit", 0, 40, Material.WATCH, 20, 5);
+		
+		return new Option[] { setupPeriod, winningScore, timeLimit }; 
 	}
 	
 	@Override
@@ -253,7 +281,20 @@ public class Assassination extends GameMode
 			public void run()
 			{
 				allocateTargets();
-				allocationProcessID = -1;
+				
+				int runTime = timeLimit.getValue();
+				if (runTime == 0)
+				{
+					allocationProcessID = -1;
+					return;
+				}
+				
+				allocationProcessID = getPlugin().getServer().getScheduler().scheduleSyncDelayedTask(getPlugin(), new Runnable() {
+					public void run()
+					{
+						timeLimitExpired();
+					}
+				}, runTime * ticksPerMinute);
 			}
 		}, setupDelay);
 	}
@@ -348,6 +389,13 @@ public class Assassination extends GameMode
 		}
 	}
 	
+	public void timeLimitExpired()
+	{
+		// TODO: work out who had the highest score, and print a message saying that
+		broadcastMessage("The time limit has elapsed");
+		finishGame();
+	}
+	
 	@EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
 	public void entityDamaged(EntityDamageEvent event)
 	{
@@ -398,7 +446,7 @@ public class Assassination extends GameMode
 			
 			victimTarget.sendMessage("You killed " + ChatColor.YELLOW + victim.getName() + ChatColor.RESET + ", who was your target, and were awarded " + points + " points.");
 			
-			if (winningScore.getValue() != 0 && score.getScore() >= winningScore.getValue())
+			if (winningScore.getValue().val != 0 && score.getScore() >= winningScore.getValue().val)
 			{
 				broadcastMessage(ChatColor.YELLOW + attacker.getName() + ChatColor.RESET + " wins the game!");
 				finishGame();
