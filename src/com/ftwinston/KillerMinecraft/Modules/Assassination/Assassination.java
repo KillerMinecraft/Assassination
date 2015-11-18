@@ -61,8 +61,10 @@ public class Assassination extends GameMode
 	{
 		LinkedList<String> messages = new LinkedList<String>();
 		messages.add("Every player will be assigned a target to kill. You may only your target, or the player hunting you.");
+		messages.add("You will be given a head that shows who your target is. Placing this will create an eye of ender, which will lead you to your target.");
 		messages.add("Remember that someone else is hunting you! If you kill anyone other than your target or your hunter, you will die.");
 		messages.add("When you kill your target, you are assigned their target, and the hunt continues.");
+		messages.add("When you respawn, you will not have a target or a hunter, until another player dies - then you will be given both.");
 		
 		return messages;
 	}
@@ -172,8 +174,8 @@ public class Assassination extends GameMode
 		// this player must no longer feature in the hunt lists
 		PlayerInfo info = playerInfo.get(removing.getName());
 		
-		String hunterName = info.hunter.name;
-		String targetName = info.target.name;
+		String hunterName = info.hunter == null ? null : info.hunter.name;
+		String targetName = info.target == null ? null : info.target.name;
 		
 		if (info.hunter != null)
 			info.hunter.target = null;
@@ -184,12 +186,14 @@ public class Assassination extends GameMode
 		info.target = null;
 		
 
-		if (hunterName.equals(targetName))
+		if (hunterName == null || targetName == null || hunterName.equals(targetName))
 			return info;
 		
 		// whoever hunted this player must now hunt their target
 		Player hunter = Helper.getPlayer(hunterName);
 		Player target = Helper.getPlayer(targetName);
+		
+		LinkedList<PlayerInfo> requeuedPlayers = new LinkedList<>();
 		
 		// additionally, all queued players should also be added in
 		while (!queuedPlayers.isEmpty())
@@ -199,11 +203,20 @@ public class Assassination extends GameMode
 			if (queued == null)
 				continue;
 			
+			// skip dead players, because we can't yet give them a target item
+			if (queued.isDead())
+			{
+				requeuedPlayers.addFirst(queuedInfo);
+				continue;
+			}
+			
 			setTargetOf(hunter, queued);
 			hunter = queued;
 		}
 		
 		setTargetOf(hunter, target);
+		queuedPlayers = requeuedPlayers;
+		
 		return info;
 	}
 	
@@ -397,7 +410,7 @@ public class Assassination extends GameMode
 			Player newHunter = getHunterOf(victim);
 			victimTarget.sendMessage("You killed " + ChatColor.YELLOW + victim.getName() + ChatColor.RESET + ", who was your hunter. " + (newHunter == null ? "No one is currently hunting you." : "Someone else is hunting you now!"));
 		}
-		else if (attacker != victimHunter && attacker != victimTarget)
+		else
 		{
 			// wasn't a target kill or legit self defense
 			// remove points from attacker, and also kill them
