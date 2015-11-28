@@ -79,7 +79,7 @@ public class Assassination extends GameMode
 		winningScore.addChoice("300 points", ScoreLimit.ThreeHundred, Material.STONE_SWORD);
 		winningScore.addChoice("350 points", ScoreLimit.ThreeHundredFifty, Material.STONE_SWORD);
 		
-		timeLimit = new NumericOption("TimeLimit", 0, 40, Material.WATCH, 20, 5);
+		timeLimit = new NumericOption("Time limit (minutes)", 0, 40, Material.WATCH, 20, 5);
 		
 		return new Option[] { setupPeriod, winningScore, timeLimit }; 
 	}
@@ -313,12 +313,10 @@ public class Assassination extends GameMode
 			Player current = players.remove(random.nextInt(players.size()));
 			setTargetOf(prevOne, current);
 			
-			prevOne.getInventory().addItem(new ItemStack(Material.COMPASS, 1));
 			prevOne = current;
 		}
 		
 		setTargetOf(prevOne, firstOne);
-		prevOne.getInventory().addItem(new ItemStack(Material.COMPASS, 1));
 		
 		broadcastMessage("All players have been allocated a target to kill");
 		inWarmup = false;
@@ -399,6 +397,9 @@ public class Assassination extends GameMode
 	@EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
 	public void entityDamaged(EntityDamageEvent event)
 	{
+		if (!(event.getEntity() instanceof Player))
+			return;
+		
 		Player victim = (Player)event.getEntity();
 		if (victim == null)
 			return;
@@ -488,7 +489,7 @@ public class Assassination extends GameMode
 		
 		public KillType(String name, int value, boolean visibleByDefault)
 		{
-			this.name = name;
+			this.name = ChatColor.GRAY + name;
 			this.baseValue = value;
 			this.currentValue = baseValue;
 			this.valueScale = 1f;
@@ -724,7 +725,7 @@ public class Assassination extends GameMode
 	@EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
 	public void onEvent(InventoryClickEvent event) {
 		ItemStack stack = event.getCurrentItem();
-		if (stack.getType() != Material.SKULL_ITEM || !isTargetSkull(stack))
+		if (stack == null || stack.getType() != Material.SKULL_ITEM || !isTargetSkull(stack))
 			return;
 		
 		Inventory top = event.getView().getTopInventory();
