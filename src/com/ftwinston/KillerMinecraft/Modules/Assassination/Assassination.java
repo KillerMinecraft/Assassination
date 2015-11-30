@@ -255,7 +255,7 @@ public class Assassination extends GameMode
 		return Helper.getSafeSpawnLocationNear(spawnPoint);
 	}
 	
-	boolean inWarmup = true;
+	boolean inWarmup;
 	int allocationProcessID = -1;
 	
 	@Override
@@ -275,12 +275,14 @@ public class Assassination extends GameMode
 			playerInfo.put(player.getName(), new PlayerInfo(player.getName()));
 		}
 		
+		inWarmup = true;
 		long setupDelay = setupPeriod.getValue() == 0 ? 200 : ticksPerMinute * setupPeriod.getValue();
 		
 		allocationProcessID = getPlugin().getServer().getScheduler().scheduleSyncDelayedTask(getPlugin(), new Runnable() {
 			public void run()
 			{
 				allocateTargets();
+				inWarmup = false;
 				
 				int runTime = timeLimit.getValue();
 				if (runTime == 0)
@@ -319,7 +321,6 @@ public class Assassination extends GameMode
 		setTargetOf(prevOne, firstOne);
 		
 		broadcastMessage("All players have been allocated a target to kill");
-		inWarmup = false;
 	}
 	
 	@Override
@@ -398,22 +399,35 @@ public class Assassination extends GameMode
 	public void entityDamaged(EntityDamageEvent event)
 	{
 		if (!(event.getEntity() instanceof Player))
+		{
+			broadcastMessage(ChatColor.LIGHT_PURPLE + "Damaged entity not player");
 			return;
+		}
 		
 		Player victim = (Player)event.getEntity();
 		if (victim == null)
+		{
+			broadcastMessage(ChatColor.LIGHT_PURPLE + "Can't get damaged player");
 			return;
+		}
 		
 		Player attacker = Helper.getAttacker(event);
 		
 		if (inWarmup && attacker != null)
 		{
+			broadcastMessage(ChatColor.LIGHT_PURPLE + "Cancelling warmup attack");
+			
 			event.setCancelled(true);
 			return;
 		}
 		
 		if (event.getFinalDamage() < victim.getHealth())
+		{
+			broadcastMessage(ChatColor.LIGHT_PURPLE + "Ignoring non-lethal damage");
 			return;
+		}
+		
+		broadcastMessage(ChatColor.LIGHT_PURPLE + "Kill detected, analysing...");
 		
 		Player victimHunter = getHunterOf(victim);
 		Player victimTarget = getTargetOf(victim);
